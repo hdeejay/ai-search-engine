@@ -3,22 +3,38 @@ import Groq from "groq-sdk";
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
+
 interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
 }
+
+function truncateContent(content: string, maxLength: number = 4000): string {
+  if (content.length <= maxLength) return content;
+  return content.slice(0, maxLength) + "...";
+}
+
 export async function getGroqResponse({
   chatMessages,
+  hasUrl = false,
 }: {
   chatMessages: ChatMessage[];
+  hasUrl?: boolean;
 }) {
+  // Truncate each message content
+  const truncatedMessages = chatMessages.map(msg => ({
+    ...msg,
+    content: truncateContent(msg.content),
+  }));
+
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content:
-        "You are an academic expert, you always cite your sources and base your responses only on the context that you have been provided",
+      content: hasUrl
+        ? "You are an academic expert. Analyze the provided content in detail and cite your sources."
+        : "Provide a single brief sentence answer based on the search results. End your response with '(Source: Title)' using the most relevant source.",
     },
-    ...chatMessages,
+    ...truncatedMessages,
   ];
 
   const completion = await groq.chat.completions.create({

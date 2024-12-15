@@ -12,6 +12,7 @@ import { getGroqResponse } from "@/app/utils/groqClient";
 import { urlPattern } from "@/app/utils/scraper";
 import { scrapeUrl } from "@/app/utils/scraper";
 import { Console } from "console";
+import { searchWithPuppeteer } from "@/app/utils/search";
 
 export async function POST(req: Request) {
   try {
@@ -22,6 +23,7 @@ export async function POST(req: Request) {
     const urlMatch = message.match(urlPattern);
     const url = urlMatch ? urlMatch[0] : null;
     let scrapedContent = "";
+    let sources: string[] = [];
 
     if (url) {
       console.log("URL found:", url);
@@ -29,10 +31,29 @@ export async function POST(req: Request) {
       console.log("Scraped content:", scrapedContent);
       if (scraperResponse) {
         scrapedContent = scraperResponse.content;
+        sources.push(url);
       }
+    } else {
+      console.log("No URL found, searching the web...");
+      const searchResults = await searchWithPuppeteer(message);
+
+      const scrapedContents = await Promise.all(
+        searchResults.map(async result => {
+          const scraped = await scrapeUrl(result.url);
+          if (scraped) {
+            sources.push(`${result.title} (${result.url})`);
+            return `From ${result.title}:\n${scraped.content}`;
+          }
+          return null;
+        })
+      );
+
+      scrapedContent = scrapedContents
+        .filter(content => content !== null)
+        .join("\n\n");
     }
 
-    const userQuery = message.replace(url || "", "").trim();
+    const userQuery = url ? message.replace(url, "").trim() : message;
     const userPrompt = `
     Previous conversation:
     ${messages.map(msg => `${msg.role}: ${msg.content}`).join("\n")}
@@ -40,15 +61,20 @@ export async function POST(req: Request) {
     ${
       scrapedContent
         ? `
-    Additional context from URL:
+    Additional context from ${sources.length} sources:
     <content>
     ${scrapedContent}
     </content>
+
+    Sources:
+    ${sources.join("\n")}
     `
         : ""
     }
 
     Current question: "${userQuery}"
+    
+    Please provide a comprehensive answer based on the available context. If using information from the sources, please cite them.
     `;
 
     const llmMessages = [
@@ -62,7 +88,10 @@ export async function POST(req: Request) {
       },
     ];
 
-    const response = await getGroqResponse({ chatMessages: llmMessages });
+    const response = await getGroqResponse({
+      chatMessages: llmMessages,
+      hasUrl: !!url,
+    });
     return NextResponse.json({ message: response });
   } catch (error) {
     console.error("Error in POST handler:", error);
